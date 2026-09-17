@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+	<!-- Original mascot design: a friendly chibi monkey, facing right by default. -->
+	<ellipse cx="38" cy="60" rx="9" ry="16" fill="#8B5A2B" transform="rotate(-25 38 60)" />
+	<ellipse cx="27" cy="47" rx="7" ry="7" fill="#8B5A2B" />
+	<ellipse cx="50" cy="70" rx="22" ry="19" fill="#A0692F" />
+	<ellipse cx="54" cy="73" rx="13" ry="11" fill="#F3D5A8" />
+	<ellipse cx="34" cy="83" rx="7" ry="5" fill="#8B5A2B" />
+	<ellipse cx="58" cy="86" rx="7" ry="5" fill="#8B5A2B" />
+	<circle cx="62" cy="40" r="22" fill="#A0692F" />
+	<circle cx="45" cy="28" r="9" fill="#8B5A2B" />
+	<circle cx="45" cy="28" r="5" fill="#F3D5A8" />
+	<circle cx="76" cy="32" r="10" fill="#8B5A2B" />
+	<circle cx="76" cy="32" r="6" fill="#F3D5A8" />
+	<ellipse cx="66" cy="45" rx="15" ry="13" fill="#F3D5A8" />
+	<circle cx="61" cy="38" r="5.2" fill="#ffffff" />
+	<circle cx="74" cy="38" r="5.2" fill="#ffffff" />
+	<circle cx="62.5" cy="39" r="2.4" fill="#2b1a0e" />
+	<circle cx="75.5" cy="39" r="2.4" fill="#2b1a0e" />
+	<circle cx="66" cy="48" r="1.6" fill="#4a2e16" />
+	<circle cx="72" cy="48" r="1.6" fill="#4a2e16" />
+	<path d="M 64 53 Q 69 57 74 53" fill="none" stroke="#4a2e16" stroke-width="2" stroke-linecap="round" />
+	<path
+		d="M 30 68 Q 8 62 6 40 Q 5 30 14 26"
+		fill="none"
+		stroke="#8B5A2B"
+		stroke-width="7"
+		stroke-linecap="round"
+	/>
+</svg>
