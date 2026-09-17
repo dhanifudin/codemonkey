@@ -19,6 +19,14 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
+    # Set these as repository VARIABLES (Settings > Secrets and variables >
+    # Actions > Variables) — see .env.example. The anon/publishable key is
+    # safe to expose (it ends up in the client bundle either way); it is not
+    # a secret. Job-level (not just the build step) because `svelte-check`
+    # resolves $env/static/public too, during the type-check step.
+    env:
+      PUBLIC_SUPABASE_URL: ${{ vars.PUBLIC_SUPABASE_URL }}
+      PUBLIC_SUPABASE_ANON_KEY: ${{ vars.PUBLIC_SUPABASE_ANON_KEY }}
     steps:
       - uses: actions/checkout@v4
 
@@ -36,13 +44,6 @@ jobs:
 
       - name: Build
         run: bun run build
-        env:
-          # Set these as repository VARIABLES (Settings > Secrets and
-          # variables > Actions > Variables) — see .env.example. The anon /
-          # publishable key is safe to expose (it ends up in the client
-          # bundle either way); it is not a secret.
-          PUBLIC_SUPABASE_URL: ${{ vars.PUBLIC_SUPABASE_URL }}
-          PUBLIC_SUPABASE_ANON_KEY: ${{ vars.PUBLIC_SUPABASE_ANON_KEY }}
 
       - uses: actions/configure-pages@v5
 
