@@ -1,41 +1,120 @@
 <script lang="ts">
+	import { onMount } from 'svelte';
 	import { goto } from '$app/navigation';
-	import { run, type BlockProgram, type RunResult } from '$lib/engine';
-	import { nextChallengeSlug } from '$lib/content';
+	import { asset } from '$app/paths';
+	import { run, type BlockProgram, type Command, type Program, type RunResult, type Trigger } from '$lib/engine';
+	import { courses, nextInCourse } from '$lib/content';
 	import PhaserGame, { type PhaserGameHandle } from '$lib/game/PhaserGame.svelte';
-	import IconBlockStrip from '$lib/icon-blocks/IconBlockStrip.svelte';
+	import BlockStrip from '$lib/icon-blocks/BlockStrip.svelte';
+	import PlayHeader from '$lib/ui/PlayHeader.svelte';
+	import ResultBanner from '$lib/ui/ResultBanner.svelte';
+	import HintButton from '$lib/ui/HintButton.svelte';
+	import IconButton from '$lib/ui/IconButton.svelte';
 	import { saveProgress } from '$lib/supabase/progress';
+	import * as sfx from '$lib/sound/sfx';
 	import type { PageProps } from './$types';
+
+	const LAST_PLAYED_KEY = 'codemonkey:last-played';
 
 	let { data }: PageProps = $props();
 	let challenge = $derived(data.challenge);
+	let course = $derived(data.course);
+	let movement = $derived<'turtle' | 'arrows'>(challenge.movement === 'arrows' ? 'arrows' : 'turtle');
+	// Only courses 2/3 cap the strip and show dashed placeholders — course
+	// 1's turtle levels keep their original uncapped programs even though
+	// the schema fills in a default maxSlots for every challenge.
+	let stripMaxSlots = $derived(movement === 'arrows' ? challenge.maxSlots : undefined);
 
-	let program = $state<BlockProgram>([]);
+	let mainProgram = $state<BlockProgram>([]);
+	let procPrograms = $state<Partial<Record<Trigger, BlockProgram>>>({});
 	let running = $state(false);
 	let result = $state<RunResult | null>(null);
-	let hintIndex = $state(0);
-	let showHints = $state(false);
 	let handle: PhaserGameHandle | undefined;
 
-	const next = $derived(nextChallengeSlug(challenge.slug));
-	const instruction = $derived(
-		challenge.goal.type === 'reachTile' ? 'Get the monkey to the flag! 🚩' : 'Help the monkey collect every banana! 🍌'
+	const program = $derived<BlockProgram | Program>(
+		(challenge.procedures?.length ?? 0) > 0 ? { main: mainProgram, procedures: procPrograms } : mainProgram
 	);
+	const programEmpty = $derived(mainProgram.length === 0);
+
+	$effect(() => {
+		// Reset per-challenge state whenever the level changes — otherwise
+		// a stale win/lose banner or leftover program briefly reappears on
+		// the next level (this route component is reused across
+		// navigations, not remounted).
+		void challenge.slug;
+		mainProgram = [];
+		procPrograms = {};
+		result = null;
+		running = false;
+	});
+
+	const next = $derived(nextInCourse(challenge.slug));
+	const backHref = $derived(`/course/${course.id}`);
+	const courseNumber = $derived(courses.findIndex((c) => c.id === course.id) + 1);
+	const levelBadge = $derived(`${courseNumber}-${data.levelNumber}`);
+	const instruction = $derived(
+		challenge.goal.type === 'reachTile' ? 'Get the monkey to the goal! 🏁' : 'Help the monkey collect every banana! 🍌'
+	);
+
+	const SENSOR_ICON: Record<Trigger, string> = {
+		'blue-triangle': '/assets/sensor-blue-triangle.svg',
+		'green-circle': '/assets/sensor-green-circle.svg',
+		'red-square': '/assets/sensor-red-square.svg'
+	};
+	const SENSOR_LABEL: Record<Trigger, string> = {
+		'blue-triangle': 'Blue triangle sensor',
+		'green-circle': 'Green circle sensor',
+		'red-square': 'Red square sensor'
+	};
+
+	onMount(() => {
+		try {
+			localStorage.setItem(LAST_PLAYED_KEY, challenge.slug);
+		} catch {
+			// Private browsing / blocked storage — the dashboard just falls
+			// back to its default course.
+		}
+	});
 
 	function onGameReady(h: PhaserGameHandle) {
 		handle = h;
 	}
 
-	function onProgramChange(p: BlockProgram) {
-		program = p;
+	function onProcChange(trigger: Trigger, p: BlockProgram) {
+		procPrograms = { ...procPrograms, [trigger]: p };
+	}
+
+	function playCommandSound(cmd: Command) {
+		switch (cmd.type) {
+			case 'move':
+				sfx.step();
+				break;
+			case 'jump':
+			case 'jumpUp':
+				sfx.climb();
+				break;
+			case 'collect':
+				sfx.collect();
+				break;
+			case 'blocked':
+				sfx.blocked();
+				break;
+			case 'fall':
+				sfx.fall();
+				break;
+			case 'procEnter':
+				sfx.sensor();
+				break;
+		}
 	}
 
 	async function handleRun() {
-		if (running || program.length === 0 || !handle) return;
+		if (running || programEmpty || !handle) return;
+		sfx.run();
 		running = true;
 		result = null;
 		const outcome = run(challenge, program);
-		await handle.playCommands(outcome.commands);
+		await handle.playCommands(outcome.commands, 1, playCommandSound);
 		result = outcome;
 		running = false;
 		if (outcome.outcome === 'win') {
@@ -49,14 +128,9 @@
 		result = null;
 	}
 
-	function revealHint() {
-		showHints = true;
-		hintIndex = Math.min(hintIndex + 1, challenge.hints.length - 1);
-	}
-
 	function goNext() {
 		if (next) goto(`/play/${next}`);
-		else goto('/');
+		else goto(backHref);
 	}
 </script>
 
@@ -64,190 +138,118 @@
 	<title>{challenge.title} · CodeMonkey Clone</title>
 </svelte:head>
 
-<div class="page">
-	<header class="lesson-header">
-		<a class="back-link" href="/">← Course map</a>
-		<h1>{challenge.title}</h1>
-		<p class="instruction">{instruction}</p>
-	</header>
+<div class="play-page">
+	<PlayHeader {backHref} {levelBadge} title={challenge.title} {instruction} />
 
-	<div class="lesson-body">
-		<section class="game-panel" aria-label="Game">
-			{#key challenge.slug}
-				<PhaserGame {challenge} onReady={onGameReady} />
-			{/key}
+	<div class="stage">
+		{#key challenge.slug}
+			<PhaserGame {challenge} theme={course.theme} onReady={onGameReady} />
+		{/key}
+		{#if result}
+			<ResultBanner {result} {movement} hasNext={!!next} onNext={goNext} onRetry={handleReset} />
+		{/if}
+	</div>
 
-			<div class="controls">
-				<button class="run" disabled={running || program.length === 0} onclick={handleRun}>
-					{running ? 'Running…' : '▶ Run'}
-				</button>
-				<button class="reset" disabled={running} onclick={handleReset}>⟲ Reset</button>
-				<button class="hint" disabled={running} onclick={revealHint}>💡 Hint</button>
+	<div class="hud">
+		{#each challenge.procedures ?? [] as proc (proc.trigger)}
+			<div class="proc-strip">
+				<img class="proc-icon" src={asset(SENSOR_ICON[proc.trigger])} alt={SENSOR_LABEL[proc.trigger]} />
+				{#key challenge.slug}
+					<BlockStrip
+						allowedBlocks={challenge.allowedBlocks}
+						maxSlots={proc.maxSlots}
+						disabled={running}
+						onChange={(p) => onProcChange(proc.trigger, p)}
+					/>
+				{/key}
 			</div>
+		{/each}
 
-			{#if showHints}
-				<p class="hint-text">{challenge.hints[hintIndex]}</p>
-			{/if}
-
-			{#if result}
-				<div class="result-banner" class:win={result.outcome === 'win'} class:lose={result.outcome === 'lose'}>
-					{#if result.outcome === 'win'}
-						<p>You did it! {'⭐'.repeat(result.stars)}</p>
-						<button onclick={goNext}>{next ? 'Next challenge →' : 'Back to course map'}</button>
-					{:else}
-						<p>
-							{#if result.reason === 'blocked'}
-								Oops, the monkey bumped into something. Try again!
-							{:else if result.reason === 'fell'}
-								Oh no, the monkey fell in a pit! Try jumping over it.
-							{:else if result.reason === 'step-limit'}
-								That program runs forever — check your repeat block.
-							{:else}
-								Almost! The monkey didn't reach the goal yet.
-							{/if}
-						</p>
-					{/if}
-				</div>
-			{/if}
-		</section>
-
-		<section class="editor-panel" aria-label="Block editor">
-			<h2>Build your program</h2>
-			{#key challenge.slug}
-				<IconBlockStrip allowedBlocks={challenge.allowedBlocks} disabled={running} onChange={onProgramChange} />
-			{/key}
-		</section>
+		<div class="main-row">
+			<div class="main-strip">
+				{#key challenge.slug}
+					<BlockStrip
+						allowedBlocks={challenge.allowedBlocks}
+						maxSlots={stripMaxSlots}
+						disabled={running}
+						onChange={(p) => (mainProgram = p)}
+					/>
+				{/key}
+			</div>
+			<div class="side-controls">
+				<IconButton icon="/assets/icon-reset.svg" label="Reset" onclick={handleReset} disabled={running} />
+				<button class="play-btn" disabled={running || programEmpty} onclick={handleRun} aria-label="Run program">▶</button>
+				<HintButton hints={challenge.hints} disabled={running} />
+			</div>
+		</div>
 	</div>
 </div>
 
 <style>
-	.page {
-		max-width: 960px;
+	.play-page {
+		max-width: 640px;
 		margin: 0 auto;
-		padding: 1rem 1rem 2rem;
+		padding-bottom: var(--space-6);
+	}
+	.stage {
+		position: relative;
+		margin-top: var(--space-2);
+	}
+	.stage :global(.phaser-container) {
+		width: 100%;
+		border-radius: 0;
+	}
+	.hud {
 		display: flex;
 		flex-direction: column;
-		gap: 1.25rem;
+		gap: var(--space-3);
+		padding: var(--space-3);
+		border-radius: 0 0 var(--radius-lg) var(--radius-lg);
+		background: linear-gradient(180deg, rgba(20, 83, 45, 0.06), rgba(20, 83, 45, 0.14));
 	}
-	.lesson-header {
-		background: linear-gradient(135deg, #eafaf0, #fdf6e3);
-		border: 2px solid #cdecd6;
-		border-radius: 16px;
-		padding: 1rem 1.25rem;
+	.proc-strip {
 		display: flex;
-		flex-direction: column;
-		gap: 0.35rem;
+		align-items: center;
+		gap: var(--space-3);
+		padding: var(--space-2);
+		border-radius: var(--radius-md);
+		background: rgba(255, 255, 255, 0.35);
 	}
-	.back-link {
-		align-self: flex-start;
-		color: #16a34a;
-		text-decoration: none;
-		font-weight: 600;
-		font-size: 0.95rem;
+	.proc-icon {
+		width: 40px;
+		height: 40px;
+		flex-shrink: 0;
 	}
-	h1 {
-		margin: 0;
-		color: #14532d;
-	}
-	.instruction {
-		margin: 0;
-		font-size: 1.1rem;
-		color: #3f6212;
-		font-weight: 600;
-	}
-
-	.lesson-body {
-		display: grid;
-		grid-template-columns: minmax(0, 480px) 1fr;
-		gap: 1.5rem;
-		align-items: start;
-	}
-	@media (max-width: 800px) {
-		.lesson-body {
-			grid-template-columns: 1fr;
-		}
-	}
-
-	.game-panel,
-	.editor-panel {
-		background: #ffffff;
-		border: 2px solid #e2e8f0;
-		border-radius: 16px;
-		padding: 1rem;
+	.main-row {
 		display: flex;
-		flex-direction: column;
-		gap: 0.85rem;
-		/* Grid items default to min-width:auto, which lets a fixed-width
-		 * child (the Phaser canvas) force the track wider than the
-		 * viewport. Overriding it lets max-width:100% below actually take
-		 * effect on narrow screens. */
+		align-items: stretch;
+		gap: var(--space-3);
+	}
+	.main-strip {
+		flex: 1;
 		min-width: 0;
 	}
-	.editor-panel h2 {
-		margin: 0;
-		font-size: 1.05rem;
-		color: #14532d;
-	}
-
-	.controls {
+	.side-controls {
+		flex-shrink: 0;
 		display: flex;
-		gap: 0.75rem;
-		flex-wrap: wrap;
+		flex-direction: column;
+		align-items: center;
+		justify-content: center;
+		gap: var(--space-2);
 	}
-	.controls button {
-		min-height: 52px;
-		padding: 0 1.4rem;
-		border-radius: 12px;
+	.play-btn {
+		width: 64px;
+		height: 64px;
+		border-radius: var(--radius-lg);
 		border: none;
-		font-size: 1.15rem;
-		font-weight: 700;
+		background: var(--green-600);
+		color: white;
+		font-size: 1.6rem;
+		box-shadow: var(--shadow-btn);
 		cursor: pointer;
 	}
-	.run {
-		background: #16a34a;
-		color: white;
-		box-shadow: 0 3px 0 #14532d;
-	}
-	.reset {
-		background: #e2e8f0;
-	}
-	.hint {
-		background: #fde68a;
-	}
-	button:disabled {
+	.play-btn:disabled {
 		opacity: 0.5;
 		cursor: not-allowed;
-	}
-	.hint-text {
-		background: #fefce8;
-		border: 2px solid #fde68a;
-		border-radius: 10px;
-		padding: 0.75rem 1rem;
-		margin: 0;
-	}
-	.result-banner {
-		padding: 1rem;
-		border-radius: 12px;
-		text-align: center;
-		font-size: 1.2rem;
-	}
-	.result-banner.win {
-		background: #dcfce7;
-		border: 2px solid #16a34a;
-	}
-	.result-banner.lose {
-		background: #fee2e2;
-		border: 2px solid #dc2626;
-	}
-	.result-banner button {
-		margin-top: 0.5rem;
-		min-height: 48px;
-		padding: 0 1.25rem;
-		border-radius: 10px;
-		border: none;
-		background: #16a34a;
-		color: white;
-		font-weight: 700;
-		cursor: pointer;
 	}
 </style>

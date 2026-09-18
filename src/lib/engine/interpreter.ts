@@ -1,4 +1,4 @@
-import type { Block, BlockProgram, Challenge, Command, Direction, RunResult, Vec2 } from './types';
+import type { Block, BlockProgram, Challenge, Command, Direction, Program, RunResult, Trigger, Vec2 } from './types';
 
 const TURN_LEFT: Record<Direction, Direction> = { up: 'left', left: 'down', down: 'right', right: 'up' };
 const TURN_RIGHT: Record<Direction, Direction> = { up: 'right', right: 'down', down: 'left', left: 'up' };
@@ -22,6 +22,9 @@ interface RunState {
 	remainingCollectibles: Set<string>;
 	commands: Command[];
 	steps: number;
+	/** Indices into challenge.sensors that have already run their
+	 * procedure — each sensor fires at most once per run. */
+	firedSensors: Set<number>;
 }
 
 function inBounds(pos: Vec2, challenge: Challenge): boolean {
@@ -51,7 +54,97 @@ function tryCollect(pos: Vec2, state: RunState, challenge: Challenge, blockId: s
 	}
 }
 
-function execBlock(block: Block, state: RunState, challenge: Challenge): void {
+/** The row (y, counted from the top like the rest of the grid) a monkey
+ * standing in column `x` rests on, derived from the terrain heightmap
+ * rather than tracked separately — this keeps position always consistent
+ * with the world even if a level's playerStart is off by a row. Returns
+ * undefined when the column is a gap (terrain height 0) or out of bounds. */
+function standRow(x: number, challenge: Challenge): number | undefined {
+	const terrain = challenge.terrain;
+	if (!terrain || x < 0 || x >= terrain.length) return undefined;
+	const height = terrain[x];
+	if (height <= 0) return undefined;
+	return challenge.grid.height - height - 1;
+}
+
+/** Runs the (possibly empty) procedure attached to whichever sensor sits in
+ * the monkey's current column, if it hasn't already fired this run. */
+function checkSensor(state: RunState, challenge: Challenge, program: Program): void {
+	const sensors = challenge.sensors ?? [];
+	const idx = sensors.findIndex((s, i) => s.x === state.pos.x && !state.firedSensors.has(i));
+	if (idx === -1) return;
+	state.firedSensors.add(idx);
+	const trigger: Trigger = sensors[idx].trigger;
+	const body = program.procedures?.[trigger] ?? [];
+	state.commands.push({ type: 'procEnter', trigger });
+	for (const block of body) execBlock(block, state, challenge, program);
+	state.commands.push({ type: 'procExit', trigger });
+}
+
+/** Absolute horizontal step (stepRight/stepLeft): walks onto an
+ * equal-or-lower ledge, blocked by a taller one, falls if the column ahead
+ * is a gap. */
+function execStepHorizontal(dx: 1 | -1, block: Block, state: RunState, challenge: Challenge, program: Program): void {
+	const nx = state.pos.x + dx;
+	const facing: Direction = dx > 0 ? 'right' : 'left';
+	const terrain = challenge.terrain ?? [];
+	const curHeight = terrain[state.pos.x] ?? 0;
+	const targetHeight = terrain[nx] ?? 0;
+
+	if (nx < 0 || nx >= challenge.grid.width) {
+		state.commands.push({ type: 'blocked', at: state.pos, facing, blockId: block.id });
+		throw new BlockedError();
+	}
+	if (targetHeight === 0) {
+		state.commands.push({ type: 'fall', at: { x: nx, y: state.pos.y }, blockId: block.id });
+		throw new FellError();
+	}
+	if (targetHeight > curHeight) {
+		state.commands.push({ type: 'blocked', at: state.pos, facing, blockId: block.id });
+		throw new BlockedError();
+	}
+
+	const from = state.pos;
+	const to: Vec2 = { x: nx, y: standRow(nx, challenge)! };
+	state.pos = to;
+	state.facing = facing;
+	state.commands.push({ type: 'move', from, to, facing, blockId: block.id });
+	tryCollect(to, state, challenge, block.id);
+	checkSensor(state, challenge, program);
+}
+
+/** Diagonal climb (stepUpRight/stepUpLeft): only succeeds onto a ledge
+ * exactly one block taller — anything else is blocked. */
+function execStepClimb(dx: 1 | -1, block: Block, state: RunState, challenge: Challenge, program: Program): void {
+	const nx = state.pos.x + dx;
+	const facing: Direction = dx > 0 ? 'right' : 'left';
+	const terrain = challenge.terrain ?? [];
+	const curHeight = terrain[state.pos.x] ?? 0;
+	const targetHeight = nx < 0 || nx >= challenge.grid.width ? -1 : (terrain[nx] ?? 0);
+
+	if (targetHeight !== curHeight + 1) {
+		state.commands.push({ type: 'blocked', at: state.pos, facing, blockId: block.id });
+		throw new BlockedError();
+	}
+
+	const from = state.pos;
+	const to: Vec2 = { x: nx, y: standRow(nx, challenge)! };
+	state.pos = to;
+	state.facing = facing;
+	state.commands.push({ type: 'move', from, to, facing, blockId: block.id });
+	tryCollect(to, state, challenge, block.id);
+	checkSensor(state, challenge, program);
+}
+
+/** Vertical hop in place (stepUp) — used to reach a banana hanging one row
+ * above a brick ledge. Never fails; the monkey lands back where it stood. */
+function execStepUp(block: Block, state: RunState, challenge: Challenge): void {
+	const apex: Vec2 = { x: state.pos.x, y: state.pos.y - 1 };
+	state.commands.push({ type: 'jumpUp', at: apex, blockId: block.id });
+	tryCollect(apex, state, challenge, block.id);
+}
+
+function execBlock(block: Block, state: RunState, challenge: Challenge, program: Program): void {
 	state.steps += 1;
 	if (state.steps > STEP_BUDGET) throw new StepLimitError();
 
@@ -110,9 +203,19 @@ function execBlock(block: Block, state: RunState, challenge: Challenge): void {
 			state.facing = to;
 			return;
 		}
+		case 'stepRight':
+			return execStepHorizontal(1, block, state, challenge, program);
+		case 'stepLeft':
+			return execStepHorizontal(-1, block, state, challenge, program);
+		case 'stepUpRight':
+			return execStepClimb(1, block, state, challenge, program);
+		case 'stepUpLeft':
+			return execStepClimb(-1, block, state, challenge, program);
+		case 'stepUp':
+			return execStepUp(block, state, challenge);
 		case 'repeat': {
 			for (let i = 0; i < block.count; i++) {
-				for (const child of block.body) execBlock(child, state, challenge);
+				for (const child of block.body) execBlock(child, state, challenge, program);
 			}
 			return;
 		}
@@ -131,24 +234,40 @@ export function countBlocks(program: BlockProgram): number {
 	return n;
 }
 
+/** Total blocks placed across the main strip and every procedure strip —
+ * a level with procedures counts them all toward star criteria. */
+function totalBlocksUsed(program: Program): number {
+	let n = countBlocks(program.main);
+	for (const body of Object.values(program.procedures ?? {})) {
+		if (body) n += countBlocks(body);
+	}
+	return n;
+}
+
 function starsFor(challenge: Challenge, blocksUsed: number): RunResult['stars'] {
 	if (blocksUsed <= challenge.starCriteria.threeStars.maxBlocks) return 3;
 	if (blocksUsed <= challenge.starCriteria.twoStars.maxBlocks) return 2;
 	return 1;
 }
 
-export function run(challenge: Challenge, program: BlockProgram): RunResult {
+function normalizeProgram(input: BlockProgram | Program): Program {
+	return Array.isArray(input) ? { main: input } : input;
+}
+
+export function run(challenge: Challenge, input: BlockProgram | Program): RunResult {
+	const program = normalizeProgram(input);
 	const state: RunState = {
 		pos: { ...challenge.entities.playerStart },
 		facing: challenge.entities.playerFacing,
 		remainingCollectibles: new Set(challenge.entities.collectibles.map((c) => c.id)),
 		commands: [],
-		steps: 0
+		steps: 0,
+		firedSensors: new Set()
 	};
-	const blocksUsed = countBlocks(program);
+	const blocksUsed = totalBlocksUsed(program);
 
 	try {
-		for (const block of program) execBlock(block, state, challenge);
+		for (const block of program.main) execBlock(block, state, challenge, program);
 	} catch (err) {
 		if (err instanceof BlockedError) {
 			state.commands.push({ type: 'lose', reason: 'blocked' });

@@ -1,5 +1,5 @@
 import { supabase } from './client';
-import type { BlockProgram, RunResult } from '$lib/engine';
+import type { BlockProgram, Program, RunResult } from '$lib/engine';
 
 const LOCAL_KEY = 'codemonkey:progress-fallback';
 
@@ -20,7 +20,7 @@ function writeLocalFallback(map: ProgressMap): void {
 /** Records the result of a run. Writes to localStorage first so the course
  * map always reflects the kid's progress even if the network call below
  * fails or they're offline — the Supabase write is best-effort on top. */
-export async function saveProgress(slug: string, result: RunResult, program: BlockProgram): Promise<void> {
+export async function saveProgress(slug: string, result: RunResult, program: BlockProgram | Program): Promise<void> {
 	const local = readLocalFallback();
 	local[slug] = Math.max(local[slug] ?? 0, result.stars);
 	writeLocalFallback(local);

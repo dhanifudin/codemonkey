@@ -1,26 +1,17 @@
-import { challengeSchema } from './schema';
+export { courses, getCourse, findChallenge, nextInCourse } from './courses';
+export type { CourseMeta, FoundChallenge, Ribbon, Difficulty, Theme } from './courses';
+
+import { courses, findChallenge, nextInCourse } from './courses';
 import type { Challenge } from '$lib/engine';
-import { firstSteps } from './challenges/01-first-steps';
-import { turningCorner } from './challenges/02-turning-corner';
-import { bananaCollector } from './challenges/03-banana-collector';
-import { repeatPower } from './challenges/04-repeat-power';
-import { squareLoop } from './challenges/05-square-loop';
-import { leapOfFaith } from './challenges/06-leap-of-faith';
-import { jumpAndCollect } from './challenges/07-jump-and-collect';
 
-/** Validated at module load so a malformed challenge fails fast in dev,
- * not silently at runtime mid-lesson. New challenges are appended, never
- * inserted — this keeps existing slugs' course-map numbers and any saved
- * progress stable. */
-const raw = [firstSteps, turningCorner, bananaCollector, repeatPower, squareLoop, leapOfFaith, jumpAndCollect];
-
-export const course: Challenge[] = raw.map((c) => challengeSchema.parse(c) as Challenge);
+/** Course 1 (the original 7 turtle challenges), kept for the pre-courses
+ * call sites and tests that only ever knew about one course. */
+export const course: Challenge[] = courses[0].challenges;
 
 export function getChallenge(slug: string): Challenge | undefined {
-	return course.find((c) => c.slug === slug);
+	return findChallenge(slug)?.challenge;
 }
 
 export function nextChallengeSlug(slug: string): string | undefined {
-	const i = course.findIndex((c) => c.slug === slug);
-	return i >= 0 ? course[i + 1]?.slug : undefined;
+	return nextInCourse(slug);
 }

@@ -26,9 +26,12 @@ test('reports incomplete when the program falls short', async ({ page }) => {
 	await expect(page.getByText("didn't reach the goal", { exact: false })).toBeVisible({ timeout: 5000 });
 });
 
-test('course map links into a challenge', async ({ page }) => {
+test('dashboard → course roadmap → challenge navigation', async ({ page }) => {
 	await page.goto('/');
-	await expect(page.getByText('First Steps')).toBeVisible();
-	await page.getByText('First Steps').click();
+	await expect(page.getByText('Sequencing & Loops')).toBeVisible();
+	await page.getByText('Sequencing & Loops').click();
+	await expect(page).toHaveURL(/\/course\/sequencing-loops/);
+
+	await page.getByRole('link', { name: /First Steps/ }).click();
 	await expect(page).toHaveURL(/\/play\/first-steps/);
 });
