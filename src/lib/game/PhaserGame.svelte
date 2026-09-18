@@ -1,6 +1,10 @@
 <script lang="ts" module>
 	export interface PhaserGameHandle {
-		playCommands(commands: import('$lib/engine').Command[], speedMultiplier?: number): Promise<void>;
+		playCommands(
+			commands: import('$lib/engine').Command[],
+			speedMultiplier?: number,
+			onCommand?: (cmd: import('$lib/engine').Command) => void
+		): Promise<void>;
 		reset(): void;
 	}
 </script>
@@ -9,24 +13,26 @@
 	import { onDestroy, onMount } from 'svelte';
 	import Phaser from 'phaser';
 	import type { Challenge } from '$lib/engine';
+	import type { Theme } from '$lib/content';
 	import GridScene from './GridScene';
+	import SideScene from './SideScene';
 	import { EventBus } from './EventBus';
+	import type { PlayableScene } from './PlayableScene';
 
 	interface Props {
 		challenge: Challenge;
+		theme?: Theme;
 		onReady?: (handle: PhaserGameHandle) => void;
 	}
 
-	let { challenge, onReady }: Props = $props();
+	let { challenge, theme, onReady }: Props = $props();
 
 	let container: HTMLDivElement;
 	let game: Phaser.Game | undefined;
-	let scene: GridScene | undefined;
 
-	function handleSceneReady(readyScene: GridScene) {
-		scene = readyScene;
+	function handleSceneReady(readyScene: PlayableScene) {
 		onReady?.({
-			playCommands: (commands, speedMultiplier) => readyScene.playCommands(commands, speedMultiplier),
+			playCommands: (commands, speedMultiplier, onCommand) => readyScene.playCommands(commands, speedMultiplier, onCommand),
 			reset: () => readyScene.resetScene()
 		});
 	}
@@ -34,6 +40,7 @@
 	onMount(() => {
 		EventBus.on('scene-ready', handleSceneReady);
 
+		const sceneKey = challenge.view === 'side' ? 'SideScene' : 'GridScene';
 		game = new Phaser.Game({
 			type: Phaser.AUTO,
 			width: 480,
@@ -42,9 +49,17 @@
 			backgroundColor: '#ffffff',
 			// Low-end Chromebook/tablet friendliness: no physics engine needed —
 			// grid movement is hand-tweened rather than simulated.
-			scene: [GridScene]
+			//
+			// No `scene:` list here — Phaser auto-starts the first entry in
+			// that array on boot, which would run GridScene with no
+			// challenge data whenever a side-view level loads. Registering
+			// both scenes with autoStart=false and starting only the one
+			// this challenge needs avoids that.
+			scene: []
 		});
-		game.scene.start('GridScene', { challenge });
+		game.scene.add('GridScene', GridScene, false);
+		game.scene.add('SideScene', SideScene, false);
+		game.scene.start(sceneKey, { challenge, theme });
 	});
 
 	onDestroy(() => {

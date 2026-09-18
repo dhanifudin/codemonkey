@@ -167,11 +167,12 @@ export default class GridScene extends Phaser.Scene {
 	/** Plays a command stream from the engine back as animation, one command
 	 * at a time so it reads as "the monkey is doing what I coded" rather
 	 * than an instant jump-cut. */
-	async playCommands(commands: Command[], speedMultiplier = 1): Promise<void> {
+	async playCommands(commands: Command[], speedMultiplier = 1, onCommand?: (cmd: Command) => void): Promise<void> {
 		const moveMs = MOVE_MS / speedMultiplier;
 		const turnMs = TURN_MS / speedMultiplier;
 
 		for (const cmd of commands) {
+			onCommand?.(cmd);
 			switch (cmd.type) {
 				case 'move': {
 					const target = this.tileCenter(cmd.to);
